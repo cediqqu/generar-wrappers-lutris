@@ -1,0 +1,6 @@
+# Notas internas de desarrollo para agentes: no se publican.
+AGENTS.md
+
+# Skill vendorizada de ShellCheck (ver skills-lock.json).
+.agents/
+skills-lock.json

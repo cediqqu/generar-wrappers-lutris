@@ -1,0 +1,3 @@
+# Configuración de ShellCheck para este proyecto.
+# Fija el dialecto objetivo para no depender del shebang.
+shell=bash
