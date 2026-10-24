@@ -25,6 +25,10 @@ prefix ni reinstalar el juego.
 4. **Gestiona el `compatdata` huérfano** que Steam crea para el acceso directo:
    el wrapper reutiliza el prefix de Lutris y puede borrar, respaldar o
    conservar ese `.../steamapps/compatdata/<appid>` que queda inservible.
+5. **Sincroniza con Steam** (por defecto): crea el acceso directo no-Steam de
+   cada wrapper en `shortcuts.vdf`; si Steam está abierto, lo cierra y lo
+   reabre. Con `--prune` limpia los wrappers y accesos directos de juegos que ya
+   no están en Lutris. Desactívalo con `--no-add-to-steam`.
 
 Los wrappers están pensados para **ejecutarse desde Steam**: necesitan
 `STEAM_COMPAT_TOOL_PATHS`, así que si los lanzas a mano desde una terminal
@@ -55,6 +59,11 @@ bash generar_wrappers_lutris.sh --help     # ayuda
 | Opción | Descripción |
 | --- | --- |
 | `-n`, `--dry-run` | Muestra `config -> slug -> nombre` sin generar nada. |
+| `--add-to-steam` | Fuerza añadir/actualizar los accesos directos (ya es el comportamiento por defecto). |
+| `--no-add-to-steam` | No tocar Steam; solo generar wrappers. |
+| `--no-steam-restart` | Si Steam está abierto, avisar y saltar en vez de cerrarlo y reabrirlo. |
+| `--force-close-steam` | Si el cierre ordenado de Steam falla, forzarlo con `pkill`. |
+| `--prune` | Borra los wrappers huérfanos (su config de Lutris ya no existe) y sus accesos directos en Steam. |
 | `-h`, `--help` | Muestra la ayuda. |
 
 ### Variables de entorno
@@ -66,6 +75,12 @@ bash generar_wrappers_lutris.sh --help     # ayuda
 | `LUTRIS_PGA_DB` | autodetectado | Ruta a `pga.db` (nombre real del juego). |
 | `ORPHAN_ACTION` | `delete` | Qué hacer con el `compatdata` huérfano de Steam: `delete`, `backup` o `keep`. Se puede sobrescribir en cada wrapper al vuelo. |
 | `SKIP_STEAM` | `1` | Omite los juegos del runner de Steam (no necesitan wrapper). Ponlo a `0` para incluirlos. |
+| `ADD_TO_STEAM` | `1` | Sincronizar los accesos directos en Steam. `0` para desactivarlo. |
+| `STEAM_RESTART` | `1` | Cerrar y reabrir Steam si está abierto. `0` para avisar y saltar. |
+| `STEAM_SHUTDOWN_TIMEOUT` | `30` | Segundos de espera máxima al cerrar Steam. |
+| `STEAM_START_TIMEOUT` | `30` | Segundos de espera máxima al reabrir Steam. |
+| `STEAM_DIR` | autodetectado | Raíz de Steam (por defecto: se busca en `~/.local/share/Steam`, Flatpak, etc.). |
+| `STEAM_USERDATA` | autodetectado | Directorio `userdata/<id>` de Steam a usar (si tienes varias cuentas). |
 
 Ejemplo:
 
@@ -73,16 +88,56 @@ Ejemplo:
 WRAPPERS_DIR=~/steam-wrappers SKIP_STEAM=0 bash generar_wrappers_lutris.sh
 ```
 
-## Añadir los wrappers a Steam
+## Accesos directos en Steam (automático)
+
+Por defecto, al ejecutar el script se crean/actualizan los accesos directos
+no-Steam apuntando a `~/Games/wrappers/<Juego>.sh`, con el nombre real del
+juego. **No duplica**: si un juego ya tiene un acceso (aunque sea de Steam ROM
+Manager, que usa `/bin/bash` + el wrapper como opción de lanzamiento) o ya existe
+otro con el mismo nombre, no añade nada. Antes de escribir guarda
+`shortcuts.vdf.bak`.
+
+```bash
+bash generar_wrappers_lutris.sh          # genera wrappers + sincroniza Steam
+```
+
+Si Steam está abierto, el script lo **cierra**, escribe y lo **vuelve a abrir**
+con `steam -silent` —solo si hay cambios que aplicar; si no hay nada que hacer,
+no toca Steam—. Verifica que arranca y, si no, te avisa y deja la salida de Steam
+en `~/.cache/generar_wrappers/steam-restart.log`.
+
+- `--no-add-to-steam`: no tocar Steam (solo generar wrappers).
+- `--no-steam-restart`: si Steam está abierto, avisar y saltar (no reiniciar).
+- `--force-close-steam`: forzar el cierre con `pkill` si el ordenado falla.
+- `STEAM_SHUTDOWN_TIMEOUT` / `STEAM_START_TIMEOUT`: segundos de espera (30 por defecto).
+
+Si detecta un **juego en ejecución**, no cierra Steam y avisa. Si Steam no está
+instalado, este paso se omite en silencio.
+
+**Manual** (alternativa):
 
 1. En Steam: **Añadir un juego → Añadir un producto no-Steam** y elige el
    wrapper generado (`~/Games/wrappers/<Juego>.sh`).
-2. En las **Propiedades** de ese acceso directo, pestaña **Compatibilidad**,
-   activa *Forzar el uso de una herramienta de compatibilidad concreta* y elige
-   una versión de **Proton**.
+
+En ambos casos, elige en las **Propiedades** del acceso directo, pestaña
+**Compatibilidad**, *Forzar el uso de una herramienta de compatibilidad
+concreta* y una versión de **Proton**. El script **no** asigna Proton por ti.
 
 > Importante: si un wrapper «no arranca», casi siempre es porque **no se le
 > asignó una versión de Proton** al acceso directo. No es un fallo del script.
+
+## Eliminar wrappers y accesos directos huérfanos
+
+Si borras un juego en Lutris, su wrapper queda huérfano. Con Steam **cerrado**:
+
+```bash
+bash generar_wrappers_lutris.sh --prune
+```
+
+Borra los wrappers cuya config de Lutris ya no existe (los identifica por la
+marca `# Lutris config:`) y sus accesos directos en Steam. Los `.sh` sin esa
+marca no se tocan. Si no se localiza el directorio de configs de Lutris, no se
+poda nada.
 
 ## Regenerar wrappers
 
