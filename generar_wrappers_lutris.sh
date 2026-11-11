@@ -174,33 +174,37 @@ config_slug() {
     fi
 }
 
-# Carga los mapas slug -> nombre y slug -> runner desde pga.db (una consulta).
+# Carga los mapas slug -> nombre, slug -> runner y slug -> id desde pga.db.
 declare -A LUTRIS_NAMES=()
 declare -A LUTRIS_RUNNERS=()
+declare -A LUTRIS_IDS=()
 lutris_load_names() {
     local db="$1"
-    local slug name runner output
+    local slug name runner id output
 
     command -v sqlite3 >/dev/null 2>&1 || return 1
     [[ -f "$db" ]] || return 1
 
     LUTRIS_NAMES=()
     LUTRIS_RUNNERS=()
+    LUTRIS_IDS=()
 
     # Primero intenta leer también el runner; si la columna no existe, reintenta.
     if output="$(sqlite3 -separator $'\t' "$db" \
-        "SELECT slug, name, runner FROM games WHERE slug IS NOT NULL AND name IS NOT NULL;" 2>/dev/null)"; then
-        while IFS=$'\t' read -r slug name runner; do
+        "SELECT slug, name, runner, id FROM games WHERE slug IS NOT NULL AND name IS NOT NULL;" 2>/dev/null)"; then
+        while IFS=$'\t' read -r slug name runner id; do
             [[ -n "$slug" ]] || continue
             LUTRIS_NAMES["$slug"]="$name"
             LUTRIS_RUNNERS["$slug"]="$runner"
+            LUTRIS_IDS["$slug"]="$id"
         done <<< "$output"
     else
         output="$(sqlite3 -separator $'\t' "$db" \
-            "SELECT slug, name FROM games WHERE slug IS NOT NULL AND name IS NOT NULL;" 2>/dev/null || true)"
-        while IFS=$'\t' read -r slug name; do
+            "SELECT slug, name, id FROM games WHERE slug IS NOT NULL AND name IS NOT NULL;" 2>/dev/null || true)"
+        while IFS=$'\t' read -r slug name id; do
             [[ -n "$slug" ]] || continue
             LUTRIS_NAMES["$slug"]="$name"
+            LUTRIS_IDS["$slug"]="$id"
         done <<< "$output"
     fi
 
@@ -320,6 +324,7 @@ resolve_game_path() {
 # Si cerramos Steam para escribir, intenta reabrirlo al salir (red de seguridad).
 temp_wrapper=""
 temp_py=""
+temp_map=""
 STEAM_CLOSED_BY_US=0
 STEAM_ROOT=""
 STEAM_RESTART_LOG="${XDG_CACHE_HOME:-$HOME/.cache}/generar_wrappers/steam-restart.log"
@@ -329,6 +334,9 @@ cleanup() {
     fi
     if [[ -n "$temp_py" && -e "$temp_py" ]]; then
         rm -f -- "$temp_py"
+    fi
+    if [[ -n "$temp_map" && -e "$temp_map" ]]; then
+        rm -f -- "$temp_map"
     fi
     if ((STEAM_CLOSED_BY_US)); then
         printf 'Reabriendo Steam...\n' >&2
@@ -530,7 +538,7 @@ steam_shortcuts_sync() {
         return 0
     fi
 
-    local root userdata vdf add_flag prune_flag rc check_out added removed skipped closed
+    local root userdata vdf add_flag prune_flag rc check_out added removed skipped tokens_added closed slug
     if ! root="$(detect_steam_root)"; then
         return 0   # sin Steam: nada que hacer
     fi
@@ -558,6 +566,7 @@ steam_shortcuts_sync() {
     temp_py="$(mktemp "${TMPDIR:-/tmp}/steam-shortcuts.XXXXXX.py")"
     cat > "$temp_py" <<'PYEOF'
 import os
+import re
 import shutil
 import struct
 import sys
@@ -724,7 +733,37 @@ def wrapper_is_managed(path):
     return False
 
 
-def new_entry(exe, name):
+def wrapper_slug(path):
+    """Slug de Lutris a partir de la marca `# Lutris config: <slug>-<id>.yml`."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("# Lutris config:"):
+                    base = line.split(":", 1)[1].strip()
+                    if base.endswith(".yml"):
+                        base = base[:-4]
+                    return re.sub(r"-\d+$", "", base)
+                if not line.startswith("#") and line.strip():
+                    break
+    except OSError:
+        pass
+    return None
+
+
+def lutris_token(game_id):
+    game_id = str(game_id or "").strip()
+    return "lutris:rungameid/" + game_id if game_id.isdigit() else ""
+
+
+def with_token(value, game_id):
+    """Añade el token de Lutris sin tocar el resto de opciones de lanzamiento."""
+    token = lutris_token(game_id)
+    if not token or token in value:
+        return value
+    return (value + " " + token).strip()
+
+
+def new_entry(exe, name, game_id):
     quoted = '"%s"' % exe
     return {
         "appid": (T_INT32, shortcut_appid(quoted, name)),
@@ -733,7 +772,7 @@ def new_entry(exe, name):
         "StartDir": (T_STRING, '"%s"' % os.path.dirname(exe)),
         "icon": (T_STRING, ""),
         "ShortcutPath": (T_STRING, ""),
-        "LaunchOptions": (T_STRING, ""),
+        "LaunchOptions": (T_STRING, lutris_token(game_id)),
         "IsHidden": (T_INT32, 0),
         "AllowDesktopConfig": (T_INT32, 1),
         "AllowOverlay": (T_INT32, 1),
@@ -760,6 +799,18 @@ def main():
 
     shortcuts = root.get("shortcuts", (T_OBJECT, {}))[1]
 
+    # Mapa slug -> id de Lutris (para el token lutris:rungameid/<id>).
+    id_map = {}
+    if len(sys.argv) > 6 and sys.argv[6]:
+        try:
+            with open(sys.argv[6], "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 2 and parts[0]:
+                        id_map[parts[0]] = parts[1]
+        except OSError:
+            pass
+
     # Wrappers gestionados por el script (con marca de Lutris) presentes en disco.
     desired = {}
     if os.path.isdir(wrap_dir):
@@ -768,7 +819,11 @@ def main():
                 continue
             full = os.path.join(wrap_dir, name)
             if os.path.isfile(full) and wrapper_is_managed(full):
-                desired[os.path.abspath(full)] = wrapper_name(full)
+                slug = wrapper_slug(full)
+                desired[os.path.abspath(full)] = (
+                    wrapper_name(full),
+                    id_map.get(slug or "", ""),
+                )
 
     # Un acceso está "gestionado" si cita un wrapper (en Exe o LaunchOptions).
     managed = []
@@ -786,6 +841,34 @@ def main():
             if not any(os.path.exists(p) for p in paths):
                 del shortcuts[idx]
                 removed += 1
+
+    # Añadir el token de Lutris a los accesos que ya existen (sin tocar el resto).
+    tokens_added = 0
+    if add:
+        for _, (t, entry) in list(shortcuts.items()):
+            if t != T_OBJECT:
+                continue
+            paths = referenced_paths(entry, wrap_dir)
+            if not paths:
+                continue
+            game_id = ""
+            for path in paths:
+                slug = wrapper_slug(path)
+                if slug and id_map.get(slug):
+                    game_id = id_map[slug]
+                    break
+            if not game_id:
+                continue
+            key = next(
+                (k for k in ("LaunchOptions", "launchoptions")
+                 if k in entry and entry[k][0] == T_STRING),
+                None,
+            )
+            current = entry[key][1] if key else ""
+            updated = with_token(current, game_id)
+            if updated != current:
+                entry[key or "LaunchOptions"] = (T_STRING, updated)
+                tokens_added += 1
 
     # Wrappers que ya tienen acceso directo (según Exe/LaunchOptions).
     present = set()
@@ -812,14 +895,14 @@ def main():
     added = 0
     skipped = 0
     if add:
-        for exe_path, game_name in desired.items():
+        for exe_path, (game_name, game_id) in desired.items():
             if exe_path in present:
                 continue
             key = game_name.strip().casefold()
             if key in existing_names:
                 skipped += 1
                 continue
-            ordered.append((T_OBJECT, new_entry(exe_path, game_name)))
+            ordered.append((T_OBJECT, new_entry(exe_path, game_name, game_id)))
             existing_names.add(key)
             added += 1
 
@@ -827,10 +910,10 @@ def main():
     root["shortcuts"] = (T_OBJECT, shortcuts)
 
     if not write:
-        print("%d %d %d" % (added, removed, skipped))
+        print("%d %d %d %d" % (added, removed, skipped, tokens_added))
         return
 
-    if added == 0 and removed == 0:
+    if added == 0 and removed == 0 and tokens_added == 0:
         if skipped:
             print("Accesos directos: sin cambios (%d ya existían con ese nombre)." % skipped)
         else:
@@ -850,6 +933,8 @@ def main():
     os.replace(tmp, vdf)
 
     msg = "Accesos directos: %d añadidos, %d eliminados." % (added, removed)
+    if tokens_added:
+        msg += " %d actualizados con el token de Lutris." % tokens_added
     if skipped:
         msg += " %d no añadidos (ya existían con ese nombre)." % skipped
     print(msg)
@@ -859,20 +944,27 @@ if __name__ == "__main__":
     main()
 PYEOF
 
+    # Mapa slug -> id de Lutris (para el token que usa el plugin Panel de Control).
+    temp_map="$(mktemp "${TMPDIR:-/tmp}/lutris-ids.XXXXXX")"
+    for slug in "${!LUTRIS_IDS[@]}"; do
+        printf '%s\t%s\n' "$slug" "${LUTRIS_IDS[$slug]}"
+    done > "$temp_map"
+
     # 1) ¿Hay cambios? Solo lectura, sin tocar Steam.
     check_out=""
-    if ! check_out="$(python3 "$temp_py" "$vdf" "$add_flag" "$prune_flag" "$WRAPPERS_DIR" check 2>/dev/null)"; then
+    if ! check_out="$(python3 "$temp_py" "$vdf" "$add_flag" "$prune_flag" "$WRAPPERS_DIR" check "$temp_map" 2>/dev/null)"; then
         printf 'Aviso: no se pudo analizar shortcuts.vdf; se omiten los accesos directos.\n' >&2
         rm -f -- "$temp_py"
         temp_py=""
         return 0
     fi
-    read -r added removed skipped <<< "$check_out"
+    read -r added removed skipped tokens_added <<< "$check_out"
     added="${added:-0}"
     removed="${removed:-0}"
     skipped="${skipped:-0}"
+    tokens_added="${tokens_added:-0}"
 
-    if [[ "$added" == "0" && "$removed" == "0" ]]; then
+    if [[ "$added" == "0" && "$removed" == "0" && "$tokens_added" == "0" ]]; then
         if [[ "$skipped" != "0" ]]; then
             printf 'Accesos directos en Steam: sin cambios (%s ya existían con ese nombre).\n' "$skipped"
         else
@@ -926,7 +1018,7 @@ PYEOF
 
     # 3) Escribir los accesos directos.
     rc=0
-    python3 "$temp_py" "$vdf" "$add_flag" "$prune_flag" "$WRAPPERS_DIR" || rc=$?
+    python3 "$temp_py" "$vdf" "$add_flag" "$prune_flag" "$WRAPPERS_DIR" write "$temp_map" || rc=$?
     rm -f -- "$temp_py"
     temp_py=""
 
@@ -1111,6 +1203,7 @@ for config in "$LUTRIS_CONF_DIR"/*.yml; do
     printf -v quoted_game_prefix '%q' "$game_prefix"
     printf -v quoted_game_exe '%q' "$game_exe"
     printf -v quoted_working_dir '%q' "$working_dir"
+    printf -v quoted_config_path '%q' "$config"
 
     temp_wrapper="$(mktemp "$WRAPPERS_DIR/.wrapper.XXXXXX")"
 
@@ -1128,6 +1221,7 @@ export STEAM_COMPAT_DATA_PATH=$quoted_game_prefix
 
 GAME_EXE=$quoted_game_exe
 WORKING_DIR=$quoted_working_dir
+LUTRIS_YML=$quoted_config_path
 
 # Política sobre el compatdata huérfano de Steam: delete | backup | keep.
 ORPHAN_ACTION="\${ORPHAN_ACTION:-$ORPHAN_ACTION}"
@@ -1210,7 +1304,38 @@ if [[ ! -f "\$GAME_EXE" ]]; then
     echo "Aviso: el ejecutable no se encuentra en: \$GAME_EXE" >&2
 fi
 
-exec "\$PROTON" run "\$GAME_EXE" "\$@"
+# --- Compatibilidad con el plugin Panel de Control (sección Escaladores) ---
+# El plugin identifica el juego por el token lutris:rungameid/<id> que se pone
+# en las opciones de lanzamiento del acceso directo. No debe llegar al juego.
+_args=()
+for _a in "\$@"; do
+    [[ "\$_a" =~ ^lutris:rungameid/[0-9]+\$ ]] && continue
+    _args+=("\$_a")
+done
+
+# El plugin escribe los overrides en el YAML de Lutris (wine -> overrides), no
+# en Steam. Los aplicamos como WINEDLLOVERRIDES para que cargue su proxy.
+if [[ -n "\$LUTRIS_YML" && -f "\$LUTRIS_YML" ]]; then
+    _ovr="\$(awk '
+        /^wine:[[:space:]]*\$/ { w=1; next }
+        w && /^[^[:space:]]/ { w=0; o=0 }
+        w && /^[[:space:]]+overrides:[[:space:]]*\$/ { o=1; next }
+        o && /^[[:space:]]{4,}[^[:space:]]/ {
+            line=\$0
+            sub(/^[[:space:]]+/, "", line)
+            k=line; sub(/:.*/, "", k)
+            v=line; sub(/^[^:]*:[[:space:]]*/, "", v)
+            printf "%s=%s;", k, v
+            next
+        }
+        o { o=0 }
+    ' "\$LUTRIS_YML")"
+    if [[ -n "\$_ovr" ]]; then
+        export WINEDLLOVERRIDES="\${_ovr%;}"
+    fi
+fi
+
+exec "\$PROTON" run "\$GAME_EXE" "\${_args[@]}"
 EOF
 
     chmod 755 -- "$temp_wrapper"
