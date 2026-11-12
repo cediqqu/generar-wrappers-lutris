@@ -119,7 +119,7 @@ fallan a propósito.
 
 ## Accesos directos en Steam
 
-Está activa por defecto. El script escribe en
+La sincronización está activa por defecto. El script escribe en
 `<steam>/userdata/<id>/config/shortcuts.vdf` y guarda una copia
 `shortcuts.vdf.bak` antes de modificar nada. Para revertir, renombra el `.bak`
 sobre el `.vdf`.
@@ -131,7 +131,7 @@ sobre el `.vdf`.
 - **No pisa lo existente.** En los accesos que ya existen no cambia `AppName` ni
   `Exe`, así que tu carátula y tu versión de Proton se conservan. Si alguna
   versión anterior del script les puso el token `lutris:rungameid/<id>`, lo
-  retira (ver más abajo).
+  retira conservando el resto de opciones de lanzamiento (ver más abajo).
 - **Solo toca Steam si hay cambios.** Primero hace una pasada de solo lectura; si
   no hay nada que añadir ni quitar, termina sin cerrar Steam.
 - **Si Steam está abierto**, lo cierra, escribe y lo vuelve a abrir con
@@ -151,20 +151,21 @@ sobre el `.vdf`.
 ### Plugin Panel de Control (Hooandee)
 
 Desde su versión 0.87, la sección **Escaladores** reconoce los *scripts*: lee el
-propio wrapper y saca de él la línea `GAME_EXE=…/Juego.exe`, así que **no hace
-falta ningún token** ni tocar el YAML de Lutris.
+propio wrapper y saca de él la línea `GAME_EXE=…/Juego.exe`, así que no hace
+falta ningún token ni tocar el YAML de Lutris.
 
 - El wrapper no necesita nada especial: el plugin encuentra el `.exe` en su
-  contenido y lo trata como juego de Windows (antes lo veía como «Juego de
-  Linux» y no ofrecía opciones).
+  contenido y lo clasifica como juego de Windows.
 - Cuando aplicas un escalador, el plugin escribe `WINEDLLOVERRIDES=… %command%`
-  en las opciones de lanzamiento del acceso. El wrapper lo hereda y lo pasa a
-  Proton.
-- El wrapper **descarta** el token `lutris:rungameid/<id>` si todavía aparece
+  en las opciones de lanzamiento del acceso. El wrapper lo hereda del entorno,
+  así que no tiene que hacer nada.
+- El wrapper descarta el token `lutris:rungameid/<id>` si todavía aparece
   (versiones anteriores del script lo añadían); así nunca llega al juego.
 
-Si usas una versión del plugin anterior a 0.87, tendrás que seguir poniendo el
-token a mano (`lutris:rungameid/<id>` en las opciones de lanzamiento).
+Con un plugin anterior a 0.87 el token sigue haciendo falta. Añádelo a mano en
+las opciones de lanzamiento, solo el token y sin `%command%`, y ejecuta el script
+con `--no-add-to-steam`: en cada pasada normal retira ese token de los accesos
+que citan un wrapper, así que sin esa opción volvería a desaparecer.
 
 ### Añadir el acceso a mano
 
