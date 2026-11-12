@@ -128,9 +128,10 @@ sobre el `.vdf`.
   aparece en su `Exe` **o** en sus opciones de lanzamiento, lo que también cubre
   los accesos creados por Steam ROM Manager (que usa `/bin/bash` + el wrapper).
   Tampoco añade un segundo acceso con el mismo nombre.
-- **No pisa lo existente.** En los accesos que ya existen solo añade el token de
-  Lutris (ver más abajo); no cambia `AppName` ni `Exe`, así que tu carátula y tu
-  versión de Proton se conservan.
+- **No pisa lo existente.** En los accesos que ya existen no cambia `AppName` ni
+  `Exe`, así que tu carátula y tu versión de Proton se conservan. Si alguna
+  versión anterior del script les puso el token `lutris:rungameid/<id>`, lo
+  retira (ver más abajo).
 - **Solo toca Steam si hay cambios.** Primero hace una pasada de solo lectura; si
   no hay nada que añadir ni quitar, termina sin cerrar Steam.
 - **Si Steam está abierto**, lo cierra, escribe y lo vuelve a abrir con
@@ -149,18 +150,21 @@ sobre el `.vdf`.
 
 ### Plugin Panel de Control (Hooandee)
 
-Cada acceso directo recibe en sus opciones de lanzamiento el token
-`lutris:rungameid/<id>`, con el `id` real de `pga.db`. Sin ese token, la sección
-**Escaladores** del plugin trata el `.sh` como juego nativo de Linux y no ofrece
-opciones; con él, toma la ruta de Lutris.
+Desde su versión 0.87, la sección **Escaladores** reconoce los *scripts*: lee el
+propio wrapper y saca de él la línea `GAME_EXE=…/Juego.exe`, así que **no hace
+falta ningún token** ni tocar el YAML de Lutris.
 
-El token nunca llega al juego: el wrapper lo descarta antes de llamar a Proton.
-Además, el wrapper lee `wine -> overrides` del YAML de Lutris y lo exporta como
-`WINEDLLOVERRIDES`, porque el plugin escribe ahí el override del escalador y
-Proton, sin pasar por Lutris, lo ignoraría.
+- El wrapper no necesita nada especial: el plugin encuentra el `.exe` en su
+  contenido y lo trata como juego de Windows (antes lo veía como «Juego de
+  Linux» y no ofrecía opciones).
+- Cuando aplicas un escalador, el plugin escribe `WINEDLLOVERRIDES=… %command%`
+  en las opciones de lanzamiento del acceso. El wrapper lo hereda y lo pasa a
+  Proton.
+- El wrapper **descarta** el token `lutris:rungameid/<id>` si todavía aparece
+  (versiones anteriores del script lo añadían); así nunca llega al juego.
 
-El token también se añade a los accesos que ya existían, sin tocar sus demás
-opciones de lanzamiento.
+Si usas una versión del plugin anterior a 0.87, tendrás que seguir poniendo el
+token a mano (`lutris:rungameid/<id>` en las opciones de lanzamiento).
 
 ### Añadir el acceso a mano
 
